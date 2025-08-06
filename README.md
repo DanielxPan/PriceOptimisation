@@ -46,5 +46,5 @@ dashboards/     - Dashboard screenshots or visuals
 > 🔐 All data used in this project is anonymised or synthetic. No real customer or business information is disclosed.
 
 ## 🙋‍♂️ Author
-Daniel Pan  
-[LinkedIn](https://linkedin.com/in/your-profile) | [Email](mailto:your@email.com)
+Po-Yang(Daniel) Pan  
+[LinkedIn](https://linkedin.com/in/daniel-pan-16a972a1) | [Email](mailto:daniel.pan.py@gmail.com)
