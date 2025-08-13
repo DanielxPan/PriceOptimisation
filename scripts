@@ -26,7 +26,7 @@ path_eda = r"c:\\user\data\Retail+\04.PriceOptimization\05.EDA\\"
 
 ### Step1: Read CSV Files
 ### Import store suppliers lists
-csv_file1 = path_dataset + "ProductPrice_AllStores.csv"
+csv_file1 = path_dataset + "ProductPrice_DemoStores.csv"
 # For test csv_file1 = path_dataset + "TXN_GRPBY_Date_Price_CocaCola_2L_AVG.csv" 
 print(csv_file1)
 
@@ -211,7 +211,7 @@ print(path_pe)
 ########## Cost from txn
 #csv_file1 = r"c:\\user\data\Lightyear\06.ScheduledAutomation\01.RawData_ReferenceTable\StoreSuppliersLists.csv"
 # file_cost_txn = path_dataset + "ProductCost_FromLastTxn.csv"
-file_cost_txn = path_dataset + "ProductCost_FromLastTxn_AllStores.csv"
+file_cost_txn = path_dataset + "ProductCost_FromLastTxn_DemoStores.csv"
 print(file_cost_txn)
 
 df_cost_txn = pd.read_csv(file_cost_txn, low_memory = False, encoding='latin-1')#防止弹出警告
@@ -229,7 +229,7 @@ df_cost_txn = df_cost_txn[['Store', 'Product','Cost_Txn']].drop_duplicates()
 
 
 ########## Cost from deal
-file_cost_deal = path_dataset + "ProductCost_FromDeal_AllStores.csv"
+file_cost_deal = path_dataset + "ProductCost_FromDeal_DemoStores.csv"
 print(file_cost_deal)
 
 df_cost_deal = pd.read_csv(file_cost_deal, low_memory = False, encoding='latin-1')#防止弹出警告
@@ -1312,6 +1312,7 @@ for product in list_product:
         plt.close()
 
 ############### End of Block12: Create plots ###############
+
 
 
 
