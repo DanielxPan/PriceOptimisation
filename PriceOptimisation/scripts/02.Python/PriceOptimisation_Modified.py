@@ -1,0 +1,1321 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Oct 31 13:48:27 2023
+
+@author: danielp
+"""
+
+import pandas as pd
+import math
+import numpy as np
+from scipy.stats import linregress
+
+############### Block0: Define common used variables###############
+
+# Common used variables
+fmt_csv = '.csv'
+fmt_xlsx = '.xlsx'
+path_dataset = r"c:\\user\data\Retail+\04.PriceOptimization\03.Dataset\\"
+path_eda = r"c:\\user\data\Retail+\04.PriceOptimization\05.EDA\\"
+
+############### End of Block0: Define common used variables###############
+
+
+
+
+
+############### Block1: Read data source & Rename columns ###############
+
+### Step1: Read CSV Files
+### Import store suppliers lists
+csv_file1 = path_dataset + "ProductPrice_AllStores.csv"
+# For test csv_file1 = path_dataset + "TXN_GRPBY_Date_Price_CocaCola_2L_AVG.csv" 
+print(csv_file1)
+
+df = pd.read_csv(csv_file1, low_memory = False, encoding='latin-1')#防止弹出警告
+
+list_col = df.columns.tolist()
+list_new_col = ['Store'
+                ,'Product_Cat'
+                ,'Product'
+                ,'Date'
+                ,'Price'
+                ,'Margin'
+                ,'Cost'
+                ,'QTY']
+
+# Create a dictionary to map old column names to new column names
+columns_mapping = {list_col[i]: list_new_col[i] for i in range(len(list_col))}
+
+# Rename the columns in the DataFrame
+df = df.rename(columns=columns_mapping)
+
+
+############### End of Block1: Read data source & Rename columns ###############
+
+
+
+
+
+
+############### Block2: Read data source & Rename columns ###############
+
+###### Avg by days ######
+# Convert the 'Date' column to datetime
+df['Date'] = pd.to_datetime(df['Date'])
+
+# Count the unique prices for each product
+df['Unique_Prices'] = df.groupby(['Store','Product'])['Price'].transform('nunique')
+
+# Count the unique days for each price
+df['Unique_Days'] = df.groupby(['Store','Product','Price'])['Date'].transform('nunique')
+
+# Calculate the total 'QTY' for each price
+df['Total_QTY'] = df.groupby(['Store','Product','Price'])['QTY'].transform('sum')
+
+# Calculate the weighted average of 'QTY' based on 'Unique_Days'
+df['Avg_QTY'] = df['Total_QTY'] / df['Unique_Days']
+
+# Define a function to round up a value to the next integer
+def round_up(x):
+    return math.ceil(x)
+
+# Add on 06Dec, round up only predicted QTY
+# # Apply the round_up function to the 'Quantity' column
+# df['Avg_QTY_RD'] = df['Avg_QTY'].apply(round_up)
+
+# Calculate the avg 'Cost' & 'Margin' for each price
+df['Avg_Margin'] = df.groupby(['Store','Product','Price'])['Margin'].transform('mean')
+df['Avg_Cost'] = df.groupby(['Store','Product','Price'])['Cost'].transform('mean')
+
+# Remove duplicate rows
+df_pnq = df.copy()
+# df_pnq.drop_duplicates(subset=['Price'], keep='first', inplace=True)
+
+# Remove date column
+# df_pnq = df_pnq.drop('Date', axis=1)
+
+# Print or further analyze the result
+df_pnq = df_pnq[[
+                # 'ProductID' # Noted on 8Nov, cuz there are duplicates
+                  'Store'
+                 ,'Product_Cat'
+                 ,'Product'
+                 ,'Price'
+                 ,'Avg_QTY'
+                 ,'Unique_Prices'
+                 ,'Avg_Margin'
+                 ,'Avg_Cost']]
+
+df_pnq.drop_duplicates(inplace=True)
+
+
+############### End of Block2: Read data source & Rename columns ###############
+
+
+
+
+
+############### Block3: Calculate Price elasticity ###############
+
+######################## Price elasticity ############################################
+
+# Sort the DataFrame by 'Product' and 'Price'
+df_pnq.sort_values(['Store', 'Product', 'Price'], ascending=False, inplace=True)
+
+# Calculate the "Inverted_QTY" column
+df_pnq['Inverted_QTY'] =  df_pnq.groupby(['Store', 'Product'])['Avg_QTY'].cumsum()
+# check_inv_qty = df_pnq[df_pnq['Product'] == 'COCA COLA 2l']
+
+# Sort the DataFrame by 'Product' and 'Price'
+df_pnq.sort_values(['Store', 'Product', 'Price'], inplace=True)
+
+# Create Store, Product list
+# The tolist() method is available for Pandas Series, but not directly for DataFrames. To create a list of tuples from specific columns in a DataFrame, you can use the values attribute along with the tolist() method. Here's an example:
+# list_store_product =  df_pnq[['Store', 'Product']].drop_duplicates().tolist()
+list_store_product = df_pnq[['Store', 'Product']].drop_duplicates().values.tolist()
+
+dfs_pnq = []
+for store, product in list_store_product:
+    # Create filters
+    fil_store = df_pnq['Store'] == store
+    fil_product = df_pnq['Product'] == product
+
+    # Create temp dataset
+    product_data = df_pnq[fil_store & fil_product]
+    
+    # Calculate percentage change in Price and Avg_QTY
+    product_data['Change_in_Price_%'] = ((product_data['Price'] - product_data['Price'].shift(1)) / ((product_data['Price'] + product_data['Price'].shift(1)) / 2)) * 100
+    product_data['Change_in_QTY_%'] = ((product_data['Inverted_QTY'] - product_data['Inverted_QTY'].shift(1)) / ((product_data['Inverted_QTY'] + product_data['Inverted_QTY'].shift(1)) / 2)) * 100
+
+    # Calculate price elasticity
+    product_data['Price_Elasticity'] = product_data['Change_in_QTY_%'] / product_data['Change_in_Price_%']
+
+    # Replace infinite values with NaN (occurs when Price_Pct_Change is 0)
+    product_data['Price_Elasticity'] = product_data['Price_Elasticity'].replace([np.inf, -np.inf], np.nan)
+
+    product_data['Price_Elasticity_ABS'] = product_data['Price_Elasticity'].abs()
+    
+    # Append data frame
+    dfs_pnq.append(product_data)
+
+# Concatenate all DataFrames into a single DataFrame
+df_pnq = pd.concat(dfs_pnq, ignore_index=True)
+
+# Calculate the mean (average) price elasticity for each product
+mean_price_elasticity = df_pnq.groupby(['Store', 'Product'])['Price_Elasticity'].mean()
+
+# Reset the index to have 'Product' as a regular column
+mean_price_elasticity = mean_price_elasticity.reset_index()
+
+# Join back Product Reference
+df_pd_ref = df[['Store', 'Product','Product_Cat','Unique_Prices']].drop_duplicates()
+
+# Convert the 'Code' column to a string type to preserve leading zeros
+# df_pd_ref['ProductID'] = df_pd_ref['ProductID'].astype(str)
+
+# Merge tables
+mean_price_elasticity = pd.merge(mean_price_elasticity
+                                 ,df_pd_ref
+                                 ,how='inner'
+                                 ,on=['Store', 'Product'])
+
+# Change the order of columns
+list_col_pe =   [
+                  'Store'
+                 ,'Product_Cat'
+                 ,'Product'
+                 ,'Price_Elasticity'
+                 ,'Unique_Prices'
+                 ]
+
+mean_price_elasticity = mean_price_elasticity[list_col_pe]
+
+# Export the DataFrame to an Excel file
+path_pe = path_eda + 'Price_Elasticity.xlsx'
+print(path_pe)
+
+# # Create an Excel writer object and point it to the existing Excel file
+# with pd.ExcelWriter(path_pe, engine='xlsxwriter', mode='w') as writer:
+#     # Write your new DataFrame to the desired sheet (e.g., 'NewSheetName')
+#     mean_price_elasticity.to_excel(writer, sheet_name='PE_MFW_Category', index=False)
+
+
+############### End of Block3: Calculate Price elasticity ###############
+
+
+
+
+############### Block4: Method1: Max Profit ###############
+# Step1: Read CSV Files
+# Import store suppliers lists
+
+########## Cost from txn
+#csv_file1 = r"c:\\user\data\Lightyear\06.ScheduledAutomation\01.RawData_ReferenceTable\StoreSuppliersLists.csv"
+# file_cost_txn = path_dataset + "ProductCost_FromLastTxn.csv"
+file_cost_txn = path_dataset + "ProductCost_FromLastTxn_AllStores.csv"
+print(file_cost_txn)
+
+df_cost_txn = pd.read_csv(file_cost_txn, low_memory = False, encoding='latin-1')#防止弹出警告
+
+# Change column names
+df_cost_txn = df_cost_txn.rename(columns={ 'store': 'Store'
+                                          ,'product':'Product'
+                                          , 'cost_txn': 'Cost_Txn'})
+
+# Select the lowest cost deal Added on 27Nov, from Harrison's direction
+df_cost_txn = df_cost_txn.loc[df_cost_txn.groupby(['Store', 'Product'])['Cost_Txn'].idxmin()]
+
+df_cost_txn = df_cost_txn[['Store', 'Product','Cost_Txn']].drop_duplicates()
+
+
+
+########## Cost from deal
+file_cost_deal = path_dataset + "ProductCost_FromDeal_AllStores.csv"
+print(file_cost_deal)
+
+df_cost_deal = pd.read_csv(file_cost_deal, low_memory = False, encoding='latin-1')#防止弹出警告
+
+# Change column names
+df_cost_deal = df_cost_deal.rename(columns={ 'store': 'Store'
+                                            ,'product':'Product'
+                                            , 'fixed_cost': 'Cost_Deal'})
+
+# Select the lowest cost deal Added on 27Nov, from Harrison's direction
+df_cost_deal = df_cost_deal.loc[df_cost_deal.groupby(['Store', 'Product'])['Cost_Deal'].idxmin()]
+
+df_cost_deal = df_cost_deal[['Store', 'Product','Cost_Deal']].drop_duplicates()
+
+# Merge cost tables
+df_cost = pd.merge(
+                  df_cost_txn
+                 ,df_cost_deal
+                 ,how='left'
+                 ,on=['Store', 'Product'])
+
+# Use 'Cost_deal' if not null, otherwise use 'Cost_txn'
+df_cost['Fixed_Cost'] = df_cost['Cost_Deal'].combine_first(df_cost['Cost_Txn'])
+
+# Drop the intermediate columns if needed
+df_cost = df_cost[['Store', 'Product', 'Fixed_Cost']]
+
+
+# Merge tables
+df_pnq = pd.merge(df_pnq
+                 ,df_cost
+                 ,how='left'
+                 ,on=['Store', 'Product'])
+
+print(df_pnq[df_pnq['Store'] == 'Estella FoodWorks'])
+
+# Check null
+df_check = df_pnq[df_pnq['Fixed_Cost'].isna()]
+
+# Drop no cost lines
+df_pnq = df_pnq.dropna(subset=['Fixed_Cost'])
+
+df_pnq['Unit_Margin'] = df_pnq['Price'] - df_pnq['Fixed_Cost']
+
+df_pnq['Profit'] = df_pnq['Unit_Margin'] * df_pnq['Inverted_QTY'].round(0)
+
+# Add on 12Dec, per Adrian's advice
+df_pnq['Sales'] = df_pnq['Price'] * df_pnq['Inverted_QTY'].round(0)
+df_pnq['GP'] = df_pnq['Profit'].round(0) / df_pnq['Sales']
+
+df_pnq.dtypes
+
+############### End of Block4: Method1: Max Profit ###############
+
+
+
+
+
+############### Block5: Method2: linear regression ###############
+
+# Assuming df_pnq is your DataFrame with 'Price', 'Inverted_QTY', and 'Product' columns
+# Initialize lists to store measurements
+stores = []
+products = []
+slopes = []
+intercepts = []
+p_values = []
+r_squared_values = []
+linearity = []
+
+for store, product in list_store_product:
+    # Create filters
+    fil_store = df_pnq['Store'] == store
+    fil_product = df_pnq['Product'] == product
+
+    # Create temp dataset
+    product_data = df_pnq[fil_store & fil_product]
+        
+    # Check if there are enough data points for regression
+    if len(product_data) < 2:
+        print(f"Not enough data points for {store} - {product}. Skipping.")
+        continue
+        
+    # Extract 'Price' and 'Inverted_QTY' as NumPy arrays
+    price = product_data['Price'].to_numpy()
+    inverted_qty = product_data['Inverted_QTY'].to_numpy()
+
+    # Perform linear regression
+    slope, intercept, r_value, p_value, std_err = linregress(price, inverted_qty)
+    
+    # Check if the relationship is linear based on the p-value
+    alpha = 0.05  # Set a significance level
+    if p_value < alpha:
+        relationship = "Linear"
+    else:
+        relationship = "Not Linear"
+
+    # Store measurements and linearity in the respective lists
+    stores.append(store)
+    products.append(product)
+    slopes.append(slope)
+    intercepts.append(intercept)
+    p_values.append(p_value)
+    r_squared_values.append(r_value ** 2)
+    linearity.append(relationship)
+
+# Create a DataFrame with the measurements and linearity
+measurements_df = pd.DataFrame({ 'Store': stores,
+                                'Product': products,
+                                'Slope': slopes,
+                                'Intercept': intercepts,
+                                'P-Value': p_values,
+                                'R-Squared': r_squared_values,
+                                'Linearity': linearity
+                                })
+
+# Display the DataFrame with measurements
+print(measurements_df)
+
+# Group models based on R-squared values
+bins = [0, 0.3, 0.8, 1.0]
+labels = ['Low', 'Medium', 'High']
+measurements_df['R_squared_Group'] = pd.cut(measurements_df['R-Squared'], bins=bins, labels=labels, include_lowest=True)
+# The first arguement is the array or sequence of values that you want to bin.
+
+#################### Create price simulation file #################################
+# Generate Simulation Prices for each product
+price_increment = 0.05
+simulation_dfs = []  # A list to store DataFrames for each product
+
+for store, product in list_store_product:
+    # Create filters
+    fil_store = df_pnq['Store'] == store
+    fil_product = df_pnq['Product'] == product
+
+    # Create temp dataset
+    product_data = df_pnq[fil_store & fil_product]
+    
+    # Check if there are enough data points for regression
+    if len(product_data) < 2:
+        print(f"Not enough data points for {store} - {product}. Skipping.")
+        continue
+    
+    # Filter price
+    min_price = product_data['Price'].min()
+    max_price = product_data['Price'].max()
+    
+    # Round down the minimum price to 3 digits
+    min_price = math.floor(min_price * 10) / 10
+    
+    # Round up the maximum price to 3 digits
+    max_price = math.ceil(max_price * 10) / 10
+
+    simulation_prices = pd.Series(
+        [min_price + i * price_increment for i in range(int((max_price - min_price) / price_increment) + 1)]
+                                )
+
+    simulation_df = pd.DataFrame({   'Store': [store] * len(simulation_prices)
+                                    ,'Product': [product] * len(simulation_prices)
+                                    , 'Simulation_Prices': simulation_prices})
+    simulation_dfs.append(simulation_df)
+
+# Concatenate all DataFrames into a single DataFrame
+simulation_df = pd.concat(simulation_dfs, ignore_index=True)
+
+# Display the DataFrame
+print(simulation_df)
+
+# Save copy
+simulation_price_df = simulation_df.copy()
+
+################## Join simulation_df with measurements_df ##########################
+
+simulation_df = pd.merge(
+                         simulation_df
+                         ,measurements_df
+                         ,how='inner'
+                         ,on=['Store', 'Product']
+                         )
+
+simulation_df.dtypes
+
+# Predict QTY using the linear regression formula
+simulation_df['Predicted_QTY'] = simulation_df['Slope'] * simulation_df['Simulation_Prices'] + simulation_df['Intercept']
+# Fill missing values with 0 (you can adjust this based on your requirements)
+simulation_df['Predicted_QTY'] = simulation_df['Predicted_QTY'].fillna(0)
+# Add on 06DEC Normal round up
+simulation_df['Predicted_QTY'] = simulation_df['Predicted_QTY'].round(0)
+
+# Join Cost information
+# df_prd_cost = df_pnq[['Product','Fixed_Cost']].drop_duplicates()
+
+simulation_df = pd.merge(
+                         simulation_df
+                         ,df_cost
+                         ,how='inner'
+                         ,on=['Store', 'Product']
+                         )
+
+# Calculate Profit
+simulation_df['Unit_Margin'] = simulation_df['Simulation_Prices'] - simulation_df['Fixed_Cost']
+
+simulation_df['Predicted_Profit'] = simulation_df['Unit_Margin'] * simulation_df['Predicted_QTY']
+
+# Add on 12Dec, per Adrian's advice
+simulation_df['Linear_Predicted_Sales'] = simulation_df['Simulation_Prices'] * simulation_df['Predicted_QTY'].round(0)
+simulation_df['Linear_GP'] = simulation_df['Predicted_Profit'] / simulation_df['Linear_Predicted_Sales']
+
+# Calculate PE
+# list_store_product =  simulation_df[['Store', 'Product']].drop_duplicates().tolist()
+list_store_product = simulation_df[['Store', 'Product']].drop_duplicates().values.tolist()
+
+dfs_simulation = []
+for store, product in list_store_product:
+    # Create filters
+    fil_store = simulation_df['Store'] == store
+    fil_product = simulation_df['Product'] == product
+
+    # Create temp dataset
+    product_data = simulation_df[fil_store & fil_product]
+    
+    # Calculate percentage change in Simulation_Prices and Avg_QTY
+    product_data['Change_in_Simulation_Prices_%'] = ((product_data['Simulation_Prices'] - product_data['Simulation_Prices'].shift(1)) / ((product_data['Simulation_Prices'] + product_data['Simulation_Prices'].shift(1)) / 2)) * 100
+    product_data['Change_in_QTY_%'] = ((product_data['Predicted_QTY'] - product_data['Predicted_QTY'].shift(1)) / ((product_data['Predicted_QTY'] + product_data['Predicted_QTY'].shift(1)) / 2)) * 100
+
+    # Calculate Simulation_Prices elasticity
+    product_data['Simulation_Prices_Elasticity'] = product_data['Change_in_QTY_%'] / product_data['Change_in_Simulation_Prices_%']
+
+    # Replace infinite values with NaN (occurs when Simulation_Prices_Pct_Change is 0)
+    product_data['Simulation_Prices_Elasticity'] = product_data['Simulation_Prices_Elasticity'].replace([np.inf, -np.inf], np.nan)
+
+    product_data['Simulation_Prices_Elasticity_ABS'] = product_data['Simulation_Prices_Elasticity'].abs()
+    
+    # Append data frame
+    dfs_simulation.append(product_data)
+
+# Concatenate all DataFrames into a single DataFrame
+simulation_df = pd.concat(dfs_simulation, ignore_index=True)
+
+############### End of Block5: Method2: linear regression ###############
+
+
+
+
+
+############### Block6: Method3: For non-linear- Polynomial Regression ###############
+
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+
+# Initialize empty lists to store results
+stores = []
+products = []
+methods = []
+slopes = []
+slopes_qua = []
+intercepts = []
+p_values = []
+r_squared_values = []
+
+# Initialize an empty list to store the slope columns for each method
+slope_columns = []
+
+for store, product in list_store_product:
+    # Create filters
+    fil_store = df_pnq['Store'] == store
+    fil_product = df_pnq['Product'] == product
+
+    # Create temp dataset
+    product_data = df_pnq[fil_store & fil_product]
+        
+    # Check if there are enough data points for regression
+    if len(product_data) < 2:
+        print(f"Not enough data points for {store} - {product}. Skipping.")
+        continue
+
+    # Polynomial Regression
+    degree = 2
+    poly = PolynomialFeatures(degree)
+    X_poly = poly.fit_transform(product_data['Price'].values.reshape(-1, 1))
+    model_poly = LinearRegression().fit(X_poly, product_data['Inverted_QTY'])
+    stores.append(store)
+    products.append(product)
+    methods.append('Polynomial Regression')
+    slopes.append(model_poly.coef_[1])  # Take the slope coefficient for the linear term
+    slopes_qua.append(model_poly.coef_[2])  # Take the slope coefficient for the quadratic term 
+    intercepts.append(model_poly.intercept_)
+    p_values.append(None)  # Polynomial Regression doesn't provide p-values
+    r_squared_values.append(model_poly.score(X_poly, product_data['Inverted_QTY']))
+
+# Create the results_df DataFrame
+poly_df = pd.DataFrame({
+    'Store': stores,
+    'Product': products,
+    'Method': methods,
+    'Intercept': intercepts,
+    'Slope_Lin': slopes,
+    'Slope_Qua': slopes_qua,    
+    'P-Value': p_values,
+    'R-Squared': r_squared_values,
+})
+
+# Group models based on R-squared values
+bins = [0, 0.3, 0.8, 1.0]
+labels = ['Low', 'Medium', 'High']
+poly_df['R_squared_Group'] = pd.cut(poly_df['R-Squared'], bins=bins, labels=labels, include_lowest=True)
+# The first arguement is the array or sequence of values that you want to bin.
+
+############### End of Block6: Method3: For non-linear- Polynomial Regression ###############
+
+
+
+
+
+############### Block7: Join all models into 1 df for comparsion ###############
+
+##### Step1: Merge table
+simulation_poly_df = pd.merge(
+                                 simulation_price_df
+                                 ,poly_df
+                                 ,how='inner'
+                                 ,on=['Store', 'Product']
+                                 )
+
+# Predict QTY using the linear regression formula
+simulation_poly_df['Poly_Predicted_QTY'] = (simulation_poly_df['Slope_Lin'] * simulation_poly_df['Simulation_Prices'] + simulation_poly_df['Slope_Qua'] * simulation_poly_df['Simulation_Prices'] ** 2 + simulation_poly_df['Intercept'])
+
+# Fill missing values with 0 (you can adjust this based on your requirements)
+simulation_poly_df['Poly_Predicted_QTY'] = simulation_poly_df['Poly_Predicted_QTY'].fillna(0)
+simulation_poly_df['Poly_Predicted_QTY'] = simulation_poly_df['Poly_Predicted_QTY'].round(0)
+
+# Join Cost information
+simulation_poly_df = pd.merge(
+                                simulation_poly_df
+                                , df_cost
+                                , on=['Store', 'Product']
+                                )
+
+# Calculate Profit
+simulation_poly_df['Unit_Margin'] = (
+    simulation_poly_df['Simulation_Prices'] - simulation_poly_df['Fixed_Cost']
+)
+
+simulation_poly_df['Poly_Predicted_Profit'] = (
+    simulation_poly_df['Unit_Margin'] * simulation_poly_df['Poly_Predicted_QTY']
+)
+
+# Add on 12Dec, per Adrian's advice
+simulation_poly_df['Poly_Predicted_Sales'] = simulation_poly_df['Simulation_Prices'] * simulation_poly_df['Poly_Predicted_QTY'].round(0)
+simulation_poly_df['Poly_GP'] = simulation_poly_df['Poly_Predicted_Profit'] / simulation_poly_df['Poly_Predicted_Sales']
+
+# Calculate PE
+# list_store_product =  simulation_poly_df[['Store', 'Product']].drop_duplicates().tolist()
+list_store_product = simulation_poly_df[['Store', 'Product']].drop_duplicates().values.tolist()
+
+dfs_simulation_poly = []
+for store, product in list_store_product:
+    # Create filters
+    fil_store = simulation_poly_df['Store'] == store
+    fil_product = simulation_poly_df['Product'] == product
+
+    # Create temp dataset
+    product_data = simulation_poly_df[fil_store & fil_product]
+    
+    # Calculate percentage change in Simulation_Prices and Avg_QTY
+    product_data['Change_in_Simulation_Prices_%'] = ((product_data['Simulation_Prices'] - product_data['Simulation_Prices'].shift(1)) / ((product_data['Simulation_Prices'] + product_data['Simulation_Prices'].shift(1)) / 2)) * 100
+    product_data['Change_in_QTY_%'] = ((product_data['Poly_Predicted_QTY'] - product_data['Poly_Predicted_QTY'].shift(1)) / ((product_data['Poly_Predicted_QTY'] + product_data['Poly_Predicted_QTY'].shift(1)) / 2)) * 100
+
+    # Calculate Simulation_Prices elasticity
+    product_data['Simulation_Prices_Elasticity'] = product_data['Change_in_QTY_%'] / product_data['Change_in_Simulation_Prices_%']
+
+    # Replace infinite values with NaN (occurs when Simulation_Prices_Pct_Change is 0)
+    product_data['Simulation_Prices_Elasticity'] = product_data['Simulation_Prices_Elasticity'].replace([np.inf, -np.inf], np.nan)
+
+    product_data['Simulation_Prices_Elasticity_ABS'] = product_data['Simulation_Prices_Elasticity'].abs()
+    
+    # Append data frame
+    dfs_simulation_poly.append(product_data)
+
+# Concatenate all DataFrames into a single DataFrame
+simulation_poly_df = pd.concat(dfs_simulation_poly, ignore_index=True)
+
+############### End of Block7: Join all models into 1 df for comparsion ###############
+
+
+
+
+
+############### Block8: Select optimal price within meothds ###############
+
+############################ Method1- Linear Prediction ############################
+# Find the index of the row with the highest Predicted_Profit for each product
+max_profit_indices = simulation_df.groupby(['Store','Product'])['Predicted_Profit'].idxmax()
+
+# Use the indices to get the entire rows with the highest Predicted_Profit for each product
+max_profit_simulation = simulation_df.loc[max_profit_indices]
+
+# Orgainize Columns
+max_profit_simulation = max_profit_simulation[[
+                                                'Store'
+                                                ,'Product'
+                                                ,'Simulation_Prices'
+                                                ,'Predicted_QTY'
+                                                ,'Predicted_Profit'
+                                                ,'Linear_Predicted_Sales'
+                                                ,'Linear_GP'
+                                                ,'Simulation_Prices_Elasticity_ABS'
+                                                ,'Slope'
+                                                ,'Intercept'
+                                                ,'P-Value'
+                                                ,'R-Squared'
+                                                ,'Linearity'
+                                                ,'R_squared_Group'
+                                               ]]
+
+############################ Method2- Calculation ############################
+# Find the index of the row with the highest Predicted_Profit for each product
+max_profit_indices = df_pnq.groupby(['Store','Product'])['Profit'].idxmax()
+
+# Use the indices to get the entire rows with the highest Predicted_Profit for each product
+max_profit_cal = df_pnq.loc[max_profit_indices]
+
+max_profit_cal['Inverted_QTY'] = max_profit_cal['Inverted_QTY'].round(0)
+
+# Orgainize Columns
+max_profit_cal = max_profit_cal[[ 'Store'
+                                 ,'Product_Cat'
+                                 ,'Product'
+                                 ,'Unique_Prices'
+                                 ,'Price'
+                                 ,'Fixed_Cost' # Added on 13DEC
+                                 ,'Inverted_QTY'
+                                 ,'Profit'
+                                 ,'Sales'
+                                 ,'GP'
+                                 ,'Price_Elasticity_ABS']]
+# If Price_Elasticity_ABS is null that means the max profit happened at the lowest price
+
+############################ Method3- Polynomial Prediction ############################
+# Find the index of the row with the highest Predicted_Profit for each product
+max_profit_indices = simulation_poly_df.groupby(['Store','Product'])['Poly_Predicted_Profit'].idxmax()
+
+# Use the indices to get the entire rows with the highest Predicted_Profit for each product
+max_profit_poly_simulation = simulation_poly_df.loc[max_profit_indices]
+simulation_poly_df.dtypes
+
+# Orgainize Columns
+max_profit_poly_simulation = max_profit_poly_simulation[[
+                                                        'Store'
+                                                        ,'Product'
+                                                        ,'Simulation_Prices'
+                                                        ,'Poly_Predicted_QTY'
+                                                        ,'Poly_Predicted_Profit'
+                                                        ,'Poly_Predicted_Sales'
+                                                        ,'Poly_GP'
+                                                        ,'Simulation_Prices_Elasticity_ABS'
+                                                        ,'Slope_Lin'
+                                                        ,'Slope_Qua'   
+                                                        ,'Intercept'
+                                                        ,'P-Value'
+                                                        ,'R-Squared'
+                                                        ,'R_squared_Group'
+                                                       ]]
+
+# Rename Columns
+max_profit_poly_simulation = max_profit_poly_simulation.rename(columns={   
+                                                        'Simulation_Prices': 'Poly_Simulation_Price'
+                                                        ,'Simulation_Prices_Elasticity_ABS': 'Poly_Simulation_Prices_Elasticity_ABS'
+                                                        ,'Slope_Lin': 'Poly_Slope_Lin'
+                                                        ,'Slope_Qua': 'Poly_Slope_Qua'
+                                                        ,'Intercept': 'Poly_Intercept'
+                                                        ,'R-Squared': 'Poly_R-Squared'
+                                                        ,'R_squared_Group': 'Poly_R_squared_Group'})
+
+
+############### End of Block8: Select optimal price within meothds ###############
+
+
+
+
+
+############### Block9: Merge optimal price across meothds ###############
+
+############################ Merge all tables ############################################
+# Sum total QTY
+df['Total_QTY_PRD'] = df.groupby(['Product'])['QTY'].transform('sum')
+
+df_prd_qty = df[['Product','Total_QTY_PRD']].drop_duplicates()
+
+# Join totla QTY
+max_profit_df = pd.merge(
+                         max_profit_cal
+                         ,df_prd_qty
+                         ,how='inner'
+                         ,on='Product'
+                         )
+
+# Join with simulation
+max_profit_df = pd.merge(
+                         max_profit_df
+                         ,max_profit_simulation
+                         ,how='left'
+                         ,on=['Store','Product']
+                         )
+
+# Merge the result with the third table
+max_profit_df = pd.merge(max_profit_df
+                         , max_profit_poly_simulation
+                         , how='left'
+                         , on=['Store','Product']
+                         )
+
+# Organize columns
+max_profit_df.dtypes
+print(max_profit_df.columns)
+max_profit_df = max_profit_df[[
+                                  'Store'
+                                , 'Product_Cat'
+                                , 'Product'
+                                , 'Unique_Prices'
+                                , 'Total_QTY_PRD'
+                                , 'Price'
+                                , 'Fixed_Cost' # Added on 13DEC
+                                , 'Inverted_QTY'
+                                , 'Profit'
+                                , 'Sales'
+                                , 'GP'
+                                , 'Price_Elasticity_ABS'
+                                , 'Simulation_Prices'
+                                , 'Predicted_QTY'
+                                , 'Predicted_Profit'
+                                , 'Linear_Predicted_Sales'
+                                , 'Linear_GP'
+                                , 'Simulation_Prices_Elasticity_ABS'
+                                , 'Slope'
+                                , 'Intercept'
+                                , 'R-Squared'
+                                , 'Linearity'
+                                , 'R_squared_Group'
+                                , 'Poly_Simulation_Price'
+                                , 'Poly_Predicted_QTY'
+                                , 'Poly_Predicted_Profit'
+                                , 'Poly_Predicted_Sales'
+                                , 'Poly_GP'
+                                , 'Poly_Simulation_Prices_Elasticity_ABS'
+                                , 'Poly_Slope_Lin'
+                                , 'Poly_Slope_Qua'
+                                , 'Poly_Intercept'
+                                , 'Poly_R-Squared'
+                                , 'Poly_R_squared_Group'
+                                ]]
+
+############### End of Block9: Merge optimal price across meothds ###############
+
+
+
+
+
+############### Block10: Select the best optimal prices from 3 methods ###############
+
+# Step 1: Find the highest profit
+# Find the index of the row with the highest Predicted_Profit for each product
+df_optimal = max_profit_df.copy()
+
+############# Price
+# Compare Profit, Predicted_Profit, and Poly_Predicted_Profit to find the maximum profit
+df_optimal['Optimal_Price'] = df_optimal.apply(
+    lambda row: (
+        row['Simulation_Prices']        if row['Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit']) else
+        # Add on 15DEC, won't adopt Poly anymore
+        # row['Poly_Simulation_Price']    if row['Poly_Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit'], row['Poly_Predicted_Profit']) else
+        row['Price']
+                ),
+                axis=1 # 这里是对整行进行操作axis=1
+                    )
+
+############# Predicted_QTY
+# Compare Profit, Predicted_Profit, and Poly_Predicted_Profit to find the optimal price point
+df_optimal['Predicted_Daily_QTY'] = df_optimal.apply(
+    lambda row: (
+        row['Predicted_QTY'] if row['Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit']) else
+        # Add on 15DEC, won't adopt Poly anymore
+        # row['Poly_Predicted_QTY'] if row['Poly_Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit'], row['Poly_Predicted_Profit']) else
+        row['Inverted_QTY']
+    ),
+    axis=1
+)
+
+############# Optimal_Profit
+# Compare Profit, Predicted_Profit, and Poly_Predicted_Profit to find the optimal price point
+df_optimal['Optimal_Profit'] = df_optimal.apply(
+    lambda row: (
+        row['Predicted_Profit'] if row['Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit']) else
+        # Add on 15DEC, won't adopt Poly anymore
+        # row['Poly_Predicted_Profit'] if row['Poly_Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit'], row['Poly_Predicted_Profit']) else
+        row['Profit']
+    ),
+    axis=1
+)
+
+############ Optimal GP
+# Compare Profit, Predicted_Profit, and Poly_Predicted_Profit to find the optimal price point
+df_optimal['Predicted_GP'] = df_optimal.apply(
+    lambda row: (
+        row['Linear_GP'] if row['Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit']) else
+        # Add on 15DEC, won't adopt Poly anymore
+        # row['Poly_GP'] if row['Poly_Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit'], row['Poly_Predicted_Profit']) else
+        row['GP']
+    ),
+    axis=1
+)
+
+############ Confidence Level
+df_optimal['Confidence Level'] = df_optimal.apply(
+    lambda row: (
+        row['R_squared_Group'] if row['Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit']) else
+        # Add on 15DEC, won't adopt Poly anymore
+        # row['Poly_GP'] if row['Poly_Predicted_Profit'] == max(row['Profit'], row['Predicted_Profit'], row['Poly_Predicted_Profit']) else
+        'Using actual results'
+    ),
+    axis=1
+)
+
+###### Adding Method Adopted
+# Determine the MethodAdopted based on the highest profit
+df_optimal['MethodAdopted'] = 'Linear'
+                # The script will check every row of each column to pin the position
+df_optimal.loc[df_optimal['Optimal_Profit'] == df_optimal['Predicted_Profit'], 'MethodAdopted'] = 'Linear'
+# Add on 15DEC, won't adopt Poly anymore
+# df_optimal.loc[df_optimal['Optimal_Profit'] == df_optimal['Poly_Predicted_Profit'], 'MethodAdopted'] = 'Polynomial'
+df_optimal.loc[df_optimal['Optimal_Profit'] == df_optimal['Profit'], 'MethodAdopted'] = 'SimpleCalculation'
+
+# # If needed, drop the intermediate columns used for comparison
+# df_optimal = df_optimal.drop(['Optimal_Price', 'Optimal_Profit'], axis=1)
+
+# Display the resulting DataFrame
+print(df_optimal)
+
+############### End of Block10: Select the best optimal prices from 3 methods ###############
+
+
+
+
+
+################ Noted on 15DEC,  won't adopt Poly anymore, as it is unstable
+# # Step 2: Retrieve and check the lineality of the method if it is linear
+# fil_method_linear = df_optimal['MethodAdopted'] == 'Linear'
+# fil_method_nonlinear = df_optimal['Linearity'] == 'Not Linear'
+# fil_poly_r_sqr = df_optimal['Poly_R-Squared'] > 0.8
+
+# # Step 3: If the method is linear but not linear relationship, then check R-square of Poly
+# # Step 4: If R-square of poly is higher than 80% than choose Poly
+# check_lin = df_optimal[fil_method_linear & fil_method_nonlinear & fil_poly_r_sqr]
+# check_lin_poly = df_optimal[fil_method_linear & fil_method_nonlinear & (~fil_poly_r_sqr)]
+
+# # Update based on conditions- Ploy R > 80%
+# df_optimal.loc[(fil_method_linear & fil_method_nonlinear & fil_poly_r_sqr), 'MethodAdopted'] = 'Polynomial'
+#                                                                                                 # It will return value in the same row
+# df_optimal.loc[fil_method_linear & fil_method_nonlinear & fil_poly_r_sqr, 'Optimal_Price'] = df_optimal['Poly_Simulation_Price']
+# df_optimal.loc[fil_method_linear & fil_method_nonlinear & fil_poly_r_sqr, 'Optimal_Profit'] = df_optimal['Poly_Predicted_Profit']
+
+# # Update based on conditions- Ploy R < 80%
+# df_optimal.loc[(fil_method_linear & fil_method_nonlinear) & (~fil_poly_r_sqr), 'MethodAdopted'] = 'SimpleCalculation'
+# df_optimal.loc[(fil_method_linear & fil_method_nonlinear) & (~fil_poly_r_sqr), 'Optimal_Price'] = df_optimal['Price']
+# df_optimal.loc[(fil_method_linear & fil_method_nonlinear) & (~fil_poly_r_sqr), 'Optimal_Profit'] = df_optimal['Profit']
+
+
+
+
+############### Block11: Organise columns & Save out result ###############
+
+# Organize columns
+df_optimal = df_optimal[[
+                          'Store'
+                        , 'Product_Cat'
+                        , 'Product'
+                        , 'Unique_Prices'
+                        , 'MethodAdopted'
+                        , 'Confidence Level'
+                        , 'Linearity'
+                        , 'R-Squared'
+                        , 'Poly_R-Squared'
+                        , 'Optimal_Price'
+                        , 'Fixed_Cost' # Added on 13DEC
+                        , 'Predicted_QTY'
+                        , 'Optimal_Profit'
+                        , 'Predicted_GP'
+                                ]]
+
+############################ Save out result ######################################
+# Path to the existing Excel file
+path_prc_opt = path_eda + 'Optimal_Prices_AllStores.xlsx'
+
+# # Create an Excel writer object and point it to the existing Excel file
+# with pd.ExcelWriter(path_prc_opt, engine='xlsxwriter', mode='w') as writer:
+#     # Write your new DataFrame to the desired sheet (e.g., 'NewSheetName')
+#     df_pnq.to_excel(writer, sheet_name='FixedCostCalculation', index=False)
+#     simulation_df.to_excel(writer, sheet_name='Linear', index=False)
+#     # simulation_log_df.to_excel(writer, sheet_name='Log', index=False)
+#     simulation_poly_df.to_excel(writer, sheet_name='Polynomial', index=False)
+#     max_profit_df.to_excel(writer, sheet_name='Summary', index=False)
+#     df_optimal.to_excel(writer, sheet_name='OptimalResult', index=False)
+
+############### End of Block11: Organise columns & Save out result ###############
+
+
+
+
+
+############### Block12: Create plots ###############
+
+################### Plot the optimal profit and price across stores ################################
+import matplotlib.pyplot as plt
+import os
+import re
+
+path_ref_table = r"c:\\user\data\Lightyear\06.ScheduledAutomation\01.RawData_ReferenceTable\Ref_StoreNameCode.csv"
+
+# Step1: Read Files
+df_store = pd.read_csv(path_ref_table)
+df_store.dtypes
+df_store = df_store[['StoreName','StoreCodes']]
+
+# Joing back store code
+df_optimal = pd.merge (
+                            df_optimal
+                            ,df_store
+                            ,how='left'
+                            ,left_on='Store'
+                            ,right_on='StoreName'
+                            )
+
+check_na = df_optimal[df_optimal['StoreName'].isna()]
+
+# Sort the DataFrame by 'Product' and 'Price'
+df_optimal.sort_values(['Store', 'Optimal_Price', 'Optimal_Profit'], inplace=True)
+
+# Ensure the output directory exists
+output_path = r'c:\\user\data\Retail+\04.PriceOptimization\05.EDA\Plots'
+
+# Create the directory if it doesn't exist
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+
+# Define a function to replace invalid characters
+def sanitize_filename(name):
+    return re.sub(r'[\/:*?"<>|]', '_', name)
+
+# # Use when plotting profit over 0
+# df_pnq = df_pnq[df_pnq['Profit'] > 0]
+# simulation_df = simulation_df[simulation_df['Predicted_Profit'] > 0]
+# # simulation_log_df = simulation_log_df[simulation_log_df['log_Predicted_Profit'] > 0]
+# simulation_poly_df = simulation_poly_df[simulation_poly_df['Poly_Predicted_Profit'] > 0]
+
+# Create list
+# list_store_product =  simulation_poly_df[['Store', 'Product']].drop_duplicates().tolist()
+list_product = df_optimal['Product'].drop_duplicates().values.tolist()
+
+list_price_col = ['Optimal_Price', 'Optimal_Price']
+list_profit_col = ['Optimal_Profit', 'Predicted_GP']
+
+for product in list_product:
+    product_data_max = df_optimal[df_optimal['Product'] == product]
+        
+    for price, profit in zip(list_price_col, list_profit_col):
+        
+        try:
+            # Create scatter plot outside the loop
+            plt.figure(figsize=(12, 6))
+            
+            # Sanitize the product name for the file name
+            product_filename = sanitize_filename(product)
+    
+            list_store = product_data_max['StoreCodes'].drop_duplicates().values.tolist()
+    
+            for store in list_store:
+                store_product_data_max = product_data_max[product_data_max['StoreCodes'] == store]
+    
+                # Add points to the scatter plot
+                plt.scatter(store_product_data_max[price], store_product_data_max[profit], alpha=0.5, label=f"{store}")
+                for i, point in store_product_data_max.iterrows():
+                    plt.annotate(point['StoreCodes'], (point[price], point[profit]), textcoords="offset points", xytext=(5,5), ha='center')
+    
+        except Exception as e:
+        
+            print(f"Error while processing {store} {product}: {str(e)}")
+        
+        # Set plot details
+        plt.title(f"{product_filename} All Stores{price} vs {profit}")
+        plt.xlabel("Price")
+        plt.ylabel(f"{profit}")
+        plt.grid(True)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0., title='Stores', ncol=2)
+        plt.savefig(os.path.join(output_path, f"{product_filename} All Stores {price} vs {profit}.png"), bbox_inches='tight')
+        plt.close()
+
+#################### Add GP as the size of the bubble ###############################
+
+# Sort the DataFrame by 'Product' and 'Price'
+df_optimal.sort_values(['Store', 'Optimal_Price', 'Optimal_Profit'], inplace=True)
+
+# Ensure the output directory exists
+output_path = r'c:\\user\data\Retail+\04.PriceOptimization\05.EDA\Plots'
+
+# Create the directory if it doesn't exist
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+
+# Define a function to replace invalid characters
+def sanitize_filename(name):
+    return re.sub(r'[\/:*?"<>|]', '_', name)
+
+# Create list
+list_product = df_optimal['Product'].drop_duplicates().values.tolist()
+
+list_price_col = ['Optimal_Price']
+list_profit_col = ['Optimal_Profit']
+list_gp_col = ['Predicted_GP']
+
+for product in list_product:
+    product_data_max = df_optimal[df_optimal['Product'] == product]
+
+    for price, profit, gp in zip(list_price_col, list_profit_col, list_gp_col):
+
+        try:
+            # Create scatter plot outside the loop
+            plt.figure(figsize=(12, 6))
+
+            # Sanitize the product name for the file name
+            product_filename = sanitize_filename(product)
+
+            list_store = product_data_max['StoreCodes'].drop_duplicates().values.tolist()
+
+            for store in list_store:
+                store_product_data_max = product_data_max[product_data_max['StoreCodes'] == store]
+
+                # Add points to the scatter plot with 'GP' as the size
+                plt.scatter(
+                    store_product_data_max[price],
+                    store_product_data_max[profit],
+                    s=store_product_data_max[gp]*100 ,  # Adjust the multiplier for a suitable size
+                    alpha=0.5,
+                    label=f"{store}"
+                )
+                for i, point in store_product_data_max.iterrows():
+                    plt.annotate(point['StoreCodes'], (point[price], point[profit]), textcoords="offset points", xytext=(5, 5), ha='center')
+
+        except Exception as e:
+            print(f"Error while processing {store} {product}: {str(e)}")
+
+        # Set plot details
+        plt.title(f"{product_filename} All Stores {price} vs {profit} vs {gp}")
+        plt.xlabel(f"{price}")
+        plt.ylabel(f"{profit}")
+        plt.grid(True)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0., title='Stores', ncol=2)
+        plt.savefig(os.path.join(output_path, f"{product_filename} All Stores {price} vs {profit} vs {gp}.png"), bbox_inches='tight')
+        plt.close()
+
+################### Plot Comparision between 3 methods ################################
+import matplotlib.pyplot as plt
+import os
+import re  # Import the regular expression library
+
+# Sort the DataFrame by 'Product' and 'Price'
+df_pnq.sort_values(['Product', 'Price'], inplace=True)
+simulation_df.sort_values(['Product', 'Simulation_Prices'], inplace=True)
+# simulation_log_df.sort_values(['Product', 'Simulation_Prices'], inplace=True)
+simulation_poly_df.sort_values(['Product', 'Simulation_Prices'], inplace=True)
+
+# Ensure the output directory exists
+output_path = r'c:\\user\data\Retail+\04.PriceOptimization\05.EDA\Plots'
+
+# Create the directory if it doesn't exist
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+
+# Define a function to replace invalid characters
+def sanitize_filename(name):
+    return re.sub(r'[\/:*?"<>|]', '_', name)
+
+# # Use when plotting profit over 0
+# df_pnq = df_pnq[df_pnq['Profit'] > 0]
+# simulation_df = simulation_df[simulation_df['Predicted_Profit'] > 0]
+# # simulation_log_df = simulation_log_df[simulation_log_df['log_Predicted_Profit'] > 0]
+# simulation_poly_df = simulation_poly_df[simulation_poly_df['Poly_Predicted_Profit'] > 0]
+
+
+# Calculate PE
+# list_store_product =  simulation_poly_df[['Store', 'Product']].drop_duplicates().tolist()
+list_store_product = max_profit_df[['Store', 'Product']].drop_duplicates().values.tolist()
+
+for store, product in list_store_product:
+    
+    product_data_pnq = df_pnq[ (df_pnq['Product'] == product) & (df_pnq['Store'] == store)]
+    product_data_linear = simulation_df[ (simulation_df['Product'] == product) & (simulation_df['Store'] == store)]
+    # product_data_log = simulation_log_df[simulation_log_df['Product'] == product]
+    product_data_poly = simulation_poly_df[ (simulation_poly_df['Product'] == product) & (simulation_poly_df['Store'] == store)]
+
+    try:
+        # Sanitize the product name for the file name
+        product_filename = sanitize_filename(product)
+
+        # Create scatter plot for price and profit for both data frames
+        plt.figure(figsize=(12, 6))
+        plt.scatter(product_data_pnq['Price'], product_data_pnq['Profit'], alpha=0.5, label='Actual Data')
+        plt.scatter(product_data_linear['Simulation_Prices'], product_data_linear['Predicted_Profit'], alpha=0.5, label='Linear')
+        # plt.scatter(product_data_log['Simulation_Prices'], product_data_log['log_Predicted_Profit'], alpha=0.5, label='Log')
+        plt.scatter(product_data_poly['Simulation_Prices'], product_data_poly['Poly_Predicted_Profit'], alpha=0.5, label='Polynomial')
+        # In the plt.scatter function, the alpha parameter controls the transparency of the points on the scatter plot.
+
+        plt.title(f" {store}  {product} Price vs. Profit")
+        # Use when plotting profit over 0
+        # plt.title(f" {store} {product} Price vs. Profit Above 0")
+        plt.xlabel("Price")
+        plt.ylabel("Profit")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig(os.path.join(output_path, f" {store} {product_filename}_Price_vs_Profit.png"))
+        # Use when plotting profit over 0
+        # plt.savefig(os.path.join(output_path, f" {store} {product_filename}_Price_vs_Profit Above 0.png"))
+        plt.close()
+
+    except Exception as e:
+        print(f"Error while processing {store} {product}: {str(e)}")
+
+################### Plot Comparision product profit and price across stores ################################
+import matplotlib.pyplot as plt
+import os
+import re
+
+### Already joined in optimal calculation
+path_ref_table = r"c:\\user\data\Lightyear\06.ScheduledAutomation\01.RawData_ReferenceTable\Ref_StoreNameCode.csv"
+
+# Step1: Read Files
+df_store = pd.read_csv(path_ref_table)
+df_store.dtypes
+df_store = df_store[['StoreName','StoreCodes']]
+
+# Joing back store code
+max_profit_df = pd.merge (
+                            max_profit_df
+                            ,df_store
+                            ,how='left'
+                            ,left_on='Store'
+                            ,right_on='StoreName'
+                            )
+
+check_na = max_profit_df[max_profit_df['StoreCodes'].isna()]
+
+# Sort the DataFrame by 'Product' and 'Price'
+max_profit_df.sort_values(['Store', 'Price', 'Profit'], inplace=True)
+
+# Ensure the output directory exists
+output_path = r'c:\\user\data\Retail+\04.PriceOptimization\05.EDA\Plots'
+
+# Create the directory if it doesn't exist
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+
+# Define a function to replace invalid characters
+def sanitize_filename(name):
+    return re.sub(r'[\/:*?"<>|]', '_', name)
+
+# # Use when plotting profit over 0
+# df_pnq = df_pnq[df_pnq['Profit'] > 0]
+# simulation_df = simulation_df[simulation_df['Predicted_Profit'] > 0]
+# # simulation_log_df = simulation_log_df[simulation_log_df['log_Predicted_Profit'] > 0]
+# simulation_poly_df = simulation_poly_df[simulation_poly_df['Poly_Predicted_Profit'] > 0]
+
+# Create list
+# list_store_product =  simulation_poly_df[['Store', 'Product']].drop_duplicates().tolist()
+list_product = max_profit_df['Product'].drop_duplicates().values.tolist()
+
+list_price_col = ['Price','Simulation_Prices','Poly_Simulation_Price']
+list_profit_col = ['Profit', 'Predicted_Profit', 'Poly_Predicted_Profit']
+
+for product in list_product:
+    product_data_max = max_profit_df[max_profit_df['Product'] == product]
+        
+    for price, profit in zip(list_price_col, list_profit_col):
+        
+        try:
+            # Create scatter plot outside the loop
+            plt.figure(figsize=(12, 6))
+            
+            # Sanitize the product name for the file name
+            product_filename = sanitize_filename(product)
+    
+            list_store = product_data_max['StoreCodes'].drop_duplicates().values.tolist()
+    
+            for store in list_store:
+                store_product_data_max = product_data_max[product_data_max['StoreCodes'] == store]
+    
+                # Add points to the scatter plot
+                plt.scatter(store_product_data_max[price], store_product_data_max[profit], alpha=0.5, label=f"{store}")
+                for i, point in store_product_data_max.iterrows():
+                    plt.annotate(point['StoreCodes'], (point[price], point[profit]), textcoords="offset points", xytext=(5,5), ha='center')
+    
+        except Exception as e:
+            print(f"Error while processing {store} {product}: {str(e)}")
+        
+        # Set plot details
+        plt.title(f"{product_filename} {price} All Stores Price vs. Profit")
+        plt.xlabel("Price")
+        plt.ylabel("Profit")
+        plt.grid(True)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0., title='Stores', ncol=2)
+        plt.savefig(os.path.join(output_path, f"{product_filename} {price} _All_Stores_Price_vs_Profit.png"), bbox_inches='tight')
+        plt.close()
+
+################### Plot Comparision product GP and price across stores ################################
+import matplotlib.pyplot as plt
+import os
+import re
+
+### Already joined in optimal calculation
+path_ref_table = r"c:\\user\data\Lightyear\06.ScheduledAutomation\01.RawData_ReferenceTable\Ref_StoreNameCode.csv"
+
+# Sort the DataFrame by 'Product' and 'Price'
+max_profit_df.sort_values(['Store', 'Price', 'Profit'], inplace=True)
+
+# Ensure the output directory exists
+output_path = r'c:\\user\data\Retail+\04.PriceOptimization\05.EDA\Plots'
+
+# Create the directory if it doesn't exist
+if not os.path.exists(output_path):
+    os.makedirs(output_path)
+
+# Define a function to replace invalid characters
+def sanitize_filename(name):
+    return re.sub(r'[\/:*?"<>|]', '_', name)
+
+# # Use when plotting profit over 0
+# df_pnq = df_pnq[df_pnq['Profit'] > 0]
+# simulation_df = simulation_df[simulation_df['Predicted_Profit'] > 0]
+# # simulation_log_df = simulation_log_df[simulation_log_df['log_Predicted_Profit'] > 0]
+# simulation_poly_df = simulation_poly_df[simulation_poly_df['Poly_Predicted_Profit'] > 0]
+
+# Create list
+# list_store_product =  simulation_poly_df[['Store', 'Product']].drop_duplicates().tolist()
+list_product = max_profit_df['Product'].drop_duplicates().values.tolist()
+
+list_price_col = ['Price','Simulation_Prices','Poly_Simulation_Price']
+list_gp_col = ['GP', 'Linear_GP', 'Poly_GP']
+
+for product in list_product:
+    product_data_max = max_profit_df[max_profit_df['Product'] == product]
+        
+    for price, profit in zip(list_price_col, list_gp_col):
+        
+        try:
+            # Create scatter plot outside the loop
+            plt.figure(figsize=(12, 6))
+            
+            # Sanitize the product name for the file name
+            product_filename = sanitize_filename(product)
+    
+            list_store = product_data_max['StoreCodes'].drop_duplicates().values.tolist()
+    
+            for store in list_store:
+                store_product_data_max = product_data_max[product_data_max['StoreCodes'] == store]
+    
+                # Add points to the scatter plot
+                plt.scatter(store_product_data_max[price], store_product_data_max[profit], alpha=0.5, label=f"{store}")
+                for i, point in store_product_data_max.iterrows():
+                    plt.annotate(point['StoreCodes'], (point[price], point[profit]), textcoords="offset points", xytext=(5,5), ha='center')
+    
+        except Exception as e:
+            print(f"Error while processing {store} {product}: {str(e)}")
+        
+        # Set plot details
+        plt.title(f"{product_filename} All Stores {price} vs. {profit}")
+        plt.xlabel("Price")
+        plt.ylabel(f"{profit}")
+        plt.grid(True)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', borderaxespad=0., title='Stores', ncol=2)
+        plt.savefig(os.path.join(output_path, f"{product_filename} All Stores {price} vs. {profit}.png"), bbox_inches='tight')
+        plt.close()
+
+############### End of Block12: Create plots ###############
+
+
+
+
+
