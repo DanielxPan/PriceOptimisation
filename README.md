@@ -32,10 +32,10 @@ These insights provide targeted pricing recommendations based on store location 
 ## 📁 Repository Structure
 ```
 data/           - Sample or dummy data files  
-notebooks/      - Jupyter notebooks for model development  
-scripts/        - Python scripts for data cleaning and analysis  
+scripts/
+├── python/ - Python scripts for data cleaning, modeling, and visualisation
+├── sql/ - SQL queries for data extraction and aggregation
 reports/        - Visualisations and summary PDFs  
-dashboards/     - Dashboard screenshots or visuals  
 ```
 
 ## 📷 Sample Output
